@@ -1,17 +1,34 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
   <title>Mattopoly</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="wrap">
     <h1>MATTOPOLY</h1>
-    <div class="shell">
-      <canvas id="game" width="512" height="512"></canvas>
+    <div class="main-grid">
+      <!-- LEFT: Crew Panel -->
+      <div class="crew-panel">
+        <div class="heading">Crew</div>
+        <div class="small">
+          <div>Members: <span id="crewLabel">0</span>/<span id="crewCapLabel">4</span></div>
+          <div>Gang: <span id="gangNameLabel">The Family</span></div>
+        </div>
+        <div id="crewInfo" class="crew-list"></div>
+      </div>
 
+      <!-- CENTER: Canvas + Ledger -->
+      <div class="center-col">
+        <canvas id="game" width="512" height="512"></canvas>
+        <div class="ledger-panel">
+          <div class="heading">Ledger</div>
+          <div id="log" class="log"></div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Stats Panel -->
       <div class="panel">
         <div class="section">
           <div class="heading">The Boss</div>
@@ -31,9 +48,7 @@
             <div>Intimidation: <span id="intimidationLabel">4</span></div>
             <div>Cunning: <span id="cunningLabel">3</span></div>
             <div>Stat Points: <span id="statPointsLabel">0</span></div>
-            <div>Crew: <span id="crewLabel">0</span>/<span id="crewCapLabel">4</span></div>
             <div>Owned: <span id="ownedLabel">0</span>/<span id="totalLabel">0</span></div>
-            <div>Gang: <span id="gangNameLabel">The Family</span></div>
           </div>
 
           <div class="badges">
@@ -50,21 +65,18 @@
         </div>
 
         <div class="section">
-          <div class="heading">Build / Progress</div>
-          <div class="buttons" style="margin-bottom:8px;">
-            <button id="saveBtn">Save Game</button>
-            <button id="loadBtn">Load Game</button>
-            <button id="newGameBtn">New Game</button>
+          <div class="buttons" style="margin-bottom:6px;">
+            <button id="saveBtn">Save</button>
+            <button id="loadBtn">Load</button>
+            <button id="newGameBtn">New</button>
           </div>
 
-          <div id="statPointRow" class="buttons hidden" style="margin-bottom:8px;">
-            <button id="addHpBtn">+ Max HP</button>
-            <button id="addStaminaBtn">+ Stamina</button>
-            <button id="addIntimidationBtn">+ Intimidation</button>
-            <button id="addCunningBtn">+ Cunning</button>
+          <div id="statPointRow" class="buttons hidden" style="margin-bottom:6px;">
+            <button id="addHpBtn">+HP</button>
+            <button id="addStaminaBtn">+Stam</button>
+            <button id="addIntimidationBtn">+Intim</button>
+            <button id="addCunningBtn">+Cunn</button>
           </div>
-
-          <div class="small">Stat allocation only appears after level up and disappears when all points are spent.</div>
         </div>
 
         <div class="section">
@@ -72,41 +84,33 @@
           <div id="mainButtons" class="buttons">
             <button id="attackBtn">Attack</button>
             <button id="heavyBtn">Heavy Hit</button>
-            <button id="whiskeyBtn">Drink Whiskey</button>
+            <button id="whiskeyBtn">Whiskey</button>
             <button id="retreatBtn">Retreat</button>
             <button id="bribeBtn">Bribe</button>
             <button id="intimidateBtn">Intimidate</button>
           </div>
 
-          <div id="clinicButtons" class="buttons hidden" style="margin-top:8px;">
+          <div id="clinicButtons" class="buttons hidden" style="margin-top:6px;">
             <button id="healYesBtn">Yes, Heal</button>
             <button id="healNoBtn">No, Leave</button>
           </div>
 
-          <div id="decisionButtons" class="buttons hidden" style="margin-top:8px;">
+          <div id="decisionButtons" class="buttons hidden" style="margin-top:6px;">
             <button id="recruitBtn">Recruit</button>
             <button id="spareBtn">Spare</button>
             <button id="eliminateBtn">Eliminate</button>
           </div>
 
-          <div class="small" style="margin-top:8px;">
-            Move with arrow keys or WASD. Harder districts hit harder. Leveling up helps, but it does not heal Matt.
+          <div class="small" style="margin-top:6px;">
+            Arrow keys / WASD to move.
           </div>
-        </div>
-
-        <div class="section">
-          <div class="heading">Crew</div>
-          <div id="crewInfo" class="small">Matt runs solo for now.</div>
-        </div>
-
-        <div class="section">
-          <div class="heading">Ledger</div>
-          <div id="log" class="log"></div>
         </div>
       </div>
     </div>
   </div>
 
+  <script src="world.js"></script>
+  <script src="renderer.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

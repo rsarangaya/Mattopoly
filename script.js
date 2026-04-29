@@ -52,19 +52,10 @@ const clinicButtons = document.getElementById('clinicButtons');
 const decisionButtons = document.getElementById('decisionButtons');
 
 const TILE = 32;
-const MAP = 16;
-
-const districtStyles = {
-  'North Side': { block: '#1f1f2e', street: '#2b2b3f', accent: '#6f86ff' },
-  'River Ward': { block: '#1f2a24', street: '#2d3a33', accent: '#63b38a' },
-  'Gold Quarter': { block: '#2c2417', street: '#3a3120', accent: '#d4af37' },
-  'South End': { block: '#2a1f1f', street: '#3a2b2b', accent: '#c96b6b' }
-};
 
 let tick = 0;
 let state = 'explore';
 let turnCounter = 0;
-let city = [];
 let totalBusinesses = 0;
 let districtTotals = {
   'North Side': 0,
@@ -76,10 +67,18 @@ let districtTotals = {
 let currentBusiness = null;
 let currentEnemy = null;
 let currentDefeatedEnemy = null;
-let jessLocation = null;
 let finalBossUnlocked = false;
-let finalBossTile = null;
 let gangName = 'The Family';
+
+// New Pokemon-style state
+let currentInterior = null;  // { building, interior, enemies }
+let talkingNPC = null;
+let playerFacing = 'down';
+let walkFrame = 0;
+let smoothX = 0, smoothY = 0;  // pixel-level smooth position
+let isMoving = false;
+let moveTimer = 0;
+const MOVE_SPEED = 4; // pixels per frame during smooth move
 
 const associateNames = [
   'Mattolomew',
@@ -266,21 +265,7 @@ function log(message, cls = '') {
   logEl.innerHTML = logs
     .map(x => `<div class="log-entry ${x.cls}">${x.message}</div>`)
     .join('');
-}
-
-function districtFor(x, y) {
-  if (x < 8 && y < 8) return 'North Side';
-  if (x >= 8 && y < 8) return 'River Ward';
-  if (x < 8 && y >= 8) return 'Gold Quarter';
-  return 'South End';
-}
-
-function roadTile(x, y) {
-  return x % 4 === 0 || y % 4 === 0;
-}
-
-function grecoBusinessName(index) {
-  return `Greco ${grecoIndustries[index % grecoIndustries.length]}`;
+  logEl.scrollTop = 0;
 }
 
 function traitBonusDescription(trait) {
@@ -326,203 +311,75 @@ function makeGuard(rank = 'associate', difficulty = 1, district = 'North Side', 
   };
 }
 
-function generateCity() {
-  city = [];
-  totalBusinesses = 0;
-  districtTotals = {
-    'North Side': 0,
-    'River Ward': 0,
-    'Gold Quarter': 0,
-    'South End': 0
-  };
-  finalBossUnlocked = false;
-  finalBossTile = {
-    x: 15,
-    y: 15,
-    name: 'City Hall',
-    unlocked: false,
-    claimed: false
-  };
-
-  for (let y = 0; y < MAP; y++) {
-    city[y] = [];
-    for (let x = 0; x < MAP; x++) {
-      city[y][x] = {
-        kind: roadTile(x, y) ? 'street' : 'block',
-        owner: null,
-        name: '',
-        guards: [],
-        district: districtFor(x, y)
-      };
-    }
-  }
-
-  const spots = [
-    [2, 2], [6, 2], [10, 2], [14, 2],
-    [2, 6], [6, 6], [10, 6], [14, 6],
-    [2, 10], [6, 10], [10, 10], [14, 10]
-  ];
-
-  spots.forEach((spot, i) => {
-    const [x, y] = spot;
-    const district = districtFor(x, y);
-    const difficulty =
-      district === 'North Side' ? 1 :
-      district === 'River Ward' ? 2 :
-      district === 'Gold Quarter' ? 2 : 3;
-
-    const guardCount = difficulty === 1 ? rand(1, 2) : difficulty === 2 ? rand(2, 3) : rand(3, 4);
-    const guards = [];
-
-    for (let g = 0; g < guardCount; g++) {
+function initGame() {
+  buildWorld();
+  totalBusinesses = buildingDefs.length;
+  districtTotals = { 'North Side': 0, 'River Ward': 0, 'Gold Quarter': 0, 'South End': 0 };
+  buildingDefs.forEach(b => {
+    if (districtTotals[b.district] !== undefined) districtTotals[b.district]++;
+    // Generate guards for each building
+    const diff = b.difficulty;
+    const gruntCount = diff <= 1 ? rand(1, 2) : diff <= 2 ? rand(2, 3) : rand(3, 4);
+    b.guards = [];
+    for (let g = 0; g < gruntCount; g++) {
       let rank = 'associate';
-      if (g === guardCount - 1 && difficulty >= 2 && Math.random() < 0.5) rank = 'capo';
-      if (g === guardCount - 1 && difficulty === 3 && Math.random() < 0.35) rank = 'boss';
-      guards.push(makeGuard(rank, difficulty, district, false));
+      if (g === gruntCount - 1 && diff >= 2 && Math.random() < 0.5) rank = 'capo';
+      if (g === gruntCount - 1 && diff === 3 && Math.random() < 0.35) rank = 'boss';
+      b.guards.push(makeGuard(rank, diff, b.district, false));
     }
-
-    city[y][x] = {
-      kind: 'business',
-      owner: null,
-      name: grecoBusinessName(i),
-      district,
-      businessType: grecoIndustries[i % grecoIndustries.length],
-      difficulty,
-      guards,
-      donSite: false,
-      income: difficulty === 1 ? rand(12, 18) : difficulty === 2 ? rand(18, 28) : rand(26, 40)
-    };
-
-    totalBusinesses++;
-    districtTotals[district]++;
+    if (b.donSite) {
+      b.guards = [makeGuard('boss', Math.min(diff + 1, 5), b.district, true)];
+    }
   });
-
-  const donSites = [
-    [6, 6, 'North Side', 12],
-    [14, 6, 'River Ward', 13],
-    [6, 14, 'Gold Quarter', 14],
-    [14, 14, 'South End', 15]
-  ];
-
-  donSites.forEach(([x, y, district, nameIndex]) => {
-    city[y][x] = {
-      kind: 'business',
-      owner: null,
-      name: grecoBusinessName(nameIndex),
-      district,
-      businessType: grecoIndustries[nameIndex % grecoIndustries.length],
-      difficulty: district === 'South End' ? 4 : 3,
-      guards: [makeGuard('boss', district === 'South End' ? 4 : 3, district, true)],
-      donSite: true,
-      income: rand(36, 52)
-    };
-
-    totalBusinesses++;
-    districtTotals[district]++;
-  });
-
-  jessLocation = {
-    x: 1,
-    y: 14,
-    fee: 55,
-    name: "Jess's Underground Clinic"
-  };
-
-  city[jessLocation.y][jessLocation.x] = {
-    kind: 'clinic',
-    owner: 'Jess',
-    name: jessLocation.name,
-    guards: [],
-    district: 'Gold Quarter'
-  };
-
+  finalBossUnlocked = false;
   totalLabel.textContent = totalBusinesses;
 }
 
 function resetNewGame() {
   chooseGangName();
-
-  city = [];
   totalBusinesses = 0;
-  districtTotals = {
-    'North Side': 0,
-    'River Ward': 0,
-    'Gold Quarter': 0,
-    'South End': 0
-  };
   currentBusiness = null;
   currentEnemy = null;
   currentDefeatedEnemy = null;
+  currentInterior = null;
+  talkingNPC = null;
   state = 'explore';
   turnCounter = 0;
   logs.length = 0;
 
   Object.assign(player, {
     name: 'Matt',
-    x: 1,
-    y: 1,
-    maxHp: 100,
-    hp: 100,
-    maxStamina: 40,
-    stamina: 40,
-    level: 1,
-    xp: 0,
-    xpToNext: 40,
-    money: 90,
-    whiskey: 3,
-    intimidation: 4,
-    cunning: 3,
-    statPoints: 0,
-    crew: [],
-    crewCap: 4,
-    heat: 0
+    x: 13, y: 13,
+    maxHp: 100, hp: 100,
+    maxStamina: 40, stamina: 40,
+    level: 1, xp: 0, xpToNext: 40,
+    money: 90, whiskey: 3,
+    intimidation: 4, cunning: 3,
+    statPoints: 0, crew: [], crewCap: 4, heat: 0
   });
+  smoothX = player.x * TILE;
+  smoothY = player.y * TILE;
 
-  generateCity();
+  initGame();
+  updateCamera(player.x, player.y, WORLD_W, WORLD_H);
   log(`New game started. Matt is back on the street with ${gangName}.`);
-  log('Every business can be fought over, bribed, or intimidated.');
-  log('Defeated Matts can be recruited into the family for passive bonuses.');
+  log('Walk to buildings and enter through the door to fight.');
+  log('Defeated enemies can be recruited into the family.');
   log('District control boosts income, and each district has its own Don.');
-  log('Leveling up makes Matt stronger — but it never heals him.');
-  log('Jess runs her own clinic building. Use it when the city starts pushing back.');
+  log('Jess runs a clinic in Gold Quarter. Find her when things get rough.');
   updateUI();
 }
 
-function getTile(x, y) {
-  if (x < 0 || y < 0 || x >= MAP || y >= MAP) return null;
-  if (finalBossUnlocked && x === finalBossTile.x && y === finalBossTile.y && !finalBossTile.claimed) {
-    return {
-      kind: 'finalBoss',
-      owner: null,
-      name: finalBossTile.name,
-      guards: [makeGuard('boss', 5, 'City Center', true)],
-      district: 'City Center',
-      difficulty: 5
-    };
-  }
-  return city[y][x];
-}
-
+// Helper to check if a building is "owned" by checking buildingDefs
 function countOwned() {
   let n = 0;
-  for (let y = 0; y < MAP; y++) {
-    for (let x = 0; x < MAP; x++) {
-      const t = city[y][x];
-      if (t.kind === 'business' && t.owner === 'Matt') n++;
-    }
-  }
-  if (finalBossTile.claimed) n++;
+  buildingDefs.forEach(b => { if (b.owner === 'Matt') n++; });
   return n;
 }
 
 function districtOwnedCount(d) {
   let n = 0;
-  for (let y = 0; y < MAP; y++) {
-    for (let x = 0; x < MAP; x++) {
-      const t = city[y][x];
-      if (t.kind === 'business' && t.district === d && t.owner === 'Matt') n++;
-    }
-  }
+  buildingDefs.forEach(b => { if (b.district === d && b.owner === 'Matt') n++; });
   return n;
 }
 
@@ -551,31 +408,39 @@ function crewCunningBonus() {
 
 function writeCrewInfo() {
   if (!player.crew.length) {
-    crewInfo.textContent = `${gangName} runs lean for now.`;
+    crewInfo.innerHTML = `<div class="crew-empty">${gangName} runs lean for now.</div>`;
     return;
   }
 
-  crewInfo.innerHTML = player.crew.map(c =>
-    `<div>${c.name} — ${c.role} (+${c.bonus.attack} attack, +${c.bonus.income} income, +${c.bonus.intimidation} intimidation, +${c.bonus.cunning} cunning)</div>`
+  crewInfo.innerHTML = player.crew.map((c, i) =>
+    `<div class="crew-member">
+      <div class="name">${c.name}</div>
+      <div class="stats">${c.role}<br>+${c.bonus.attack} atk, +${c.bonus.income} inc<br>+${c.bonus.intimidation} intim, +${c.bonus.cunning} cunn</div>
+      <button class="kick-btn" onclick="kickCrewMember(${i})">Dismiss</button>
+    </div>`
   ).join('');
+}
+
+function kickCrewMember(index) {
+  if (index < 0 || index >= player.crew.length) return;
+  const member = player.crew[index];
+  player.crew.splice(index, 1);
+  log(`${member.name} has been dismissed from ${gangName}.`, 'danger');
+  updateUI();
 }
 
 function passiveIncome() {
   let businesses = 0;
   let income = 0;
 
-  for (let y = 0; y < MAP; y++) {
-    for (let x = 0; x < MAP; x++) {
-      const t = city[y][x];
-      if (t.kind === 'business' && t.owner === 'Matt') {
-        businesses++;
-        income += t.income;
-      }
+  buildingDefs.forEach(b => {
+    if (b.owner === 'Matt') {
+      businesses++;
+      income += b.income;
     }
-  }
+  });
 
-  if (finalBossTile.claimed) income += 80;
-  if (!businesses && !finalBossTile.claimed) return;
+  if (!businesses) return;
 
   let districtBonus = 1;
   ['North Side', 'River Ward', 'Gold Quarter', 'South End'].forEach(d => {
@@ -663,9 +528,9 @@ function updateUI() {
     `;
   } else if (state === 'clinic') {
     info.innerHTML = `
-      <div><span class="gold">${jessLocation.name}</span></div>
+      <div><span class="gold">Jess's Underground Clinic</span></div>
       <div>Jess: "You need patching up, Matt?"</div>
-      <div>Full heal price: $${jessLocation.fee}.</div>
+      <div>Full heal price: $${jessFee}.</div>
     `;
   } else if (state === 'recruit' && currentDefeatedEnemy) {
     info.innerHTML = `
@@ -674,27 +539,15 @@ function updateUI() {
       <div>Trait was ${currentDefeatedEnemy.trait}. Rank: ${currentDefeatedEnemy.rank}. ${currentDefeatedEnemy.don ? 'Dons cannot be recruited.' : ''}</div>
     `;
   } else {
-    const t = getTile(player.x, player.y);
-    const currentDistrict = districtFor(player.x, player.y);
-
-    if (t && t.kind === 'business') {
-      if (t.owner === 'Matt') {
-        info.innerHTML = `
-          <div><span class="gold">Current District:</span> ${currentDistrict}</div>
-          <div><span class="win">${t.name}</span> — Owned by Matt. Income: $${t.income}. District: ${t.district}.</div>
-        `;
-      } else {
-        info.innerHTML = `
-          <div><span class="gold">Current District:</span> ${currentDistrict}</div>
-          <div><span class="gold">${t.name}</span> — ${t.businessType}. District: ${t.district}. Guards: ${t.guards.length}. Income if claimed: $${t.income}.</div>
-        `;
-      }
-    } else if (t && t.kind === 'clinic') {
+    const currentDistrict = districtAt(player.x, player.y) || 'Unknown';
+    if (currentInterior) {
+      const b = currentInterior.building;
       info.innerHTML = `
-        <div><span class="gold">Current District:</span> ${currentDistrict}</div>
-        <div><span class="gold">${t.name}</span> — Jess heals Matt for a price.</div>
+        <div><span class="gold">Inside:</span> ${b.name}</div>
+        <div>District: ${b.district}. Difficulty: ${b.difficulty}.</div>
+        <div>Walk around and confront enemies. Exit through the door.</div>
       `;
-    } else if (finalBossUnlocked && player.x === finalBossTile.x && player.y === finalBossTile.y && !finalBossTile.claimed) {
+    } else if (finalBossUnlocked && isCityHallDoor(player.x, player.y)) {
       info.innerHTML = `
         <div><span class="gold">Current District:</span> City Center</div>
         <div><span class="danger">City Hall</span> — Don Mattissimo waits inside.</div>
@@ -702,7 +555,7 @@ function updateUI() {
     } else {
       info.innerHTML = `
         <div><span class="gold">Current District:</span> ${currentDistrict}</div>
-        <div>Walk the city. Claim businesses, control districts, recruit a family, and build ${gangName}.</div>
+        <div>Explore the city. Enter buildings through doors to fight. Build ${gangName}.</div>
       `;
     }
   }
@@ -813,14 +666,7 @@ function onPlayerDefeat() {
   player.hp = Math.max(1, Math.floor(player.maxHp * 0.45));
   player.stamina = Math.floor(player.maxStamina * 0.5);
 
-  const owned = [];
-  for (let y = 0; y < MAP; y++) {
-    for (let x = 0; x < MAP; x++) {
-      const t = city[y][x];
-      if (t.kind === 'business' && t.owner === 'Matt') owned.push(t);
-    }
-  }
-
+  const owned = buildingDefs.filter(b => b.owner === 'Matt');
   if (owned.length) {
     const lost = pick(owned);
     lost.owner = null;
@@ -835,8 +681,11 @@ function onPlayerDefeat() {
   state = 'explore';
   currentEnemy = null;
   currentBusiness = null;
-  player.x = jessLocation.x;
-  player.y = jessLocation.y;
+  currentInterior = null;
+  // Respawn at Jess's clinic door (19, 43)
+  player.x = 19; player.y = 43;
+  smoothX = player.x * TILE; smoothY = player.y * TILE;
+  updateCamera(player.x, player.y, WORLD_W, WORLD_H);
   log(`Jess drags Matt back from the edge in her neighborhood clinic.`, 'danger');
 }
 
@@ -1025,23 +874,26 @@ function eliminateEnemy() {
   advanceGuardAfterResolution();
 }
 
+let jessFee = 55;
+
 function visitJess() {
   state = 'clinic';
-  log(`Matt steps into ${jessLocation.name}. Jess looks up from her table.`, 'blue');
+  log(`Matt steps into Jess's Underground Clinic. Jess looks up from her table.`, 'blue');
   updateUI();
 }
 
 function confirmJessHeal() {
   if (state !== 'clinic') return;
-  if (player.money < jessLocation.fee) {
-    log(`Jess won't patch Matt up for free. She wants $${jessLocation.fee}.`, 'danger');
+  if (player.money < jessFee) {
+    log(`Jess won't patch Matt up for free. She wants $${jessFee}.`, 'danger');
     updateUI();
     return;
   }
-  player.money -= jessLocation.fee;
+  player.money -= jessFee;
   player.hp = player.maxHp;
   player.stamina = player.maxStamina;
-  log(`Jess patches Matt up completely for $${jessLocation.fee}.`, 'win');
+  log(`Jess patches Matt up completely for $${jessFee}.`, 'win');
+  jessFee += 10;
   state = 'explore';
   updateUI();
 }
@@ -1053,8 +905,9 @@ function leaveJess() {
   updateUI();
 }
 
+let cityHallCleared = false;
 function checkWin() {
-  if (finalBossTile.claimed) {
+  if (cityHallCleared) {
     state = 'win';
     log(`Matt owns the businesses, controls the crews, and runs the city. ${gangName} completes Mattopoly.`, 'win');
     updateUI();
@@ -1091,57 +944,207 @@ function endStepEffects() {
   updateUI();
 }
 
-function stepOnTile(tile) {
-  if (!tile) return;
-
-  if (tile.kind === 'clinic') {
-    visitJess();
-    return;
-  }
-
-  if (tile.kind === 'finalBoss') {
-    currentBusiness = {
-      name: 'City Hall',
-      district: 'City Center',
-      difficulty: 5,
-      guards: [{
-        name: 'Don Mattissimo',
-        rank: 'boss',
-        district: 'City Center',
-        trait: 'Snake',
-        level: 12,
-        maxHp: 150,
-        hp: 150,
-        attack: 18,
-        dodge: 0.14,
-        don: true
-      }]
-    };
-    startCombat(currentBusiness);
-    return;
-  }
-
-  if (tile.kind === 'business') {
-    if (tile.owner === 'Matt') {
-      log(`This place already answers to Matt: ${tile.name}.`);
-    } else if (tile.guards.length > 0) {
-      startCombat(tile);
-    } else {
-      claimBusiness(tile);
-    }
-  }
+// ===== INTERIOR EXPLORATION =====
+function enterBuilding(building) {
+  const interior = generateInterior(building);
+  const enemies = placeEnemiesInInterior(building, interior);
+  currentInterior = { building, interior, enemies };
+  // Place player at interior door
+  player.x = interior.doorX;
+  player.y = interior.doorY - 1;
+  smoothX = player.x * TILE;
+  smoothY = player.y * TILE;
+  state = 'explore';
+  log(`Matt enters ${building.name}.`, 'blue');
   updateUI();
 }
 
-function move(dx, dy) {
-  if (state !== 'explore') return;
+function exitBuilding() {
+  if (!currentInterior) return;
+  const b = currentInterior.building;
+  player.x = b.doorX;
+  player.y = b.doorY;
+  smoothX = player.x * TILE;
+  smoothY = player.y * TILE;
+  currentInterior = null;
+  updateCamera(player.x, player.y, WORLD_W, WORLD_H);
+  log(`Matt steps back outside.`);
+  updateUI();
+}
 
-  const nx = Math.max(0, Math.min(MAP - 1, player.x + dx));
-  const ny = Math.max(0, Math.min(MAP - 1, player.y + dy));
+function checkInteriorTile(x, y) {
+  if (!currentInterior) return;
+  const ci = currentInterior;
+  // Check if stepping on exit door
+  if (ci.interior.map[y] && ci.interior.map[y][x] === T.IDOOR) {
+    exitBuilding();
+    return;
+  }
+  // Check for grunt encounter
+  const enemy = ci.enemies.enemies.find(e => e.x === x && e.y === y && !e.defeated);
+  if (enemy) {
+    currentBusiness = ci.building;
+    currentEnemy = enemy.guard;
+    currentBusiness.guards = [enemy.guard];
+    enemy.defeated = true;
+    state = 'combat';
+    log(`${enemy.guard.name} spots Matt and steps up!`, 'danger');
+    updateUI();
+    return;
+  }
+  // Check if walking into capo (only if spawned)
+  if (ci.enemies.capoSpawned && !ci.enemies.capoDefeated) {
+    const cs = ci.enemies.capoSpot;
+    if (x === cs.x && y === cs.y) {
+      currentBusiness = ci.building;
+      currentEnemy = ci.enemies.capoGuard;
+      currentBusiness.guards = [ci.enemies.capoGuard];
+      state = 'combat';
+      log(`${ci.enemies.capoGuard.name} stands to fight!`, 'danger');
+      updateUI();
+      return;
+    }
+  }
+  // Check if walking into don boss (only if spawned)
+  if (ci.enemies.bossSpawned && !ci.enemies.bossDefeated && ci.enemies.bossGuard) {
+    const bs = ci.enemies.bossSpot;
+    if (x === bs.x && y === bs.y) {
+      currentBusiness = ci.building;
+      currentEnemy = ci.enemies.bossGuard;
+      currentBusiness.guards = [ci.enemies.bossGuard];
+      state = 'combat';
+      log(`${ci.enemies.bossGuard.name} stands to fight!`, 'danger');
+      updateUI();
+    }
+  }
+}
+
+// Override advanceGuardAfterResolution for interior system
+const _origAdvance = advanceGuardAfterResolution;
+advanceGuardAfterResolution = function() {
+  if (currentInterior) {
+    const ci = currentInterior;
+    const allGruntsDown = ci.enemies.enemies.every(e => e.defeated);
+
+    // Check if don boss was just defeated
+    if (ci.enemies.bossSpawned && ci.enemies.bossGuard && ci.enemies.bossGuard.hp <= 0) {
+      ci.enemies.bossDefeated = true;
+      ci.building.cleared = true;
+      claimBusiness(ci.building);
+      log(`${ci.building.name} is under Matt's control.`, 'win');
+    }
+    // Check if capo was just defeated
+    else if (ci.enemies.capoSpawned && !ci.enemies.capoDefeated && ci.enemies.capoGuard.hp <= 0) {
+      ci.enemies.capoDefeated = true;
+      if (ci.enemies.bossGuard) {
+        // Don site: boss appears after capo
+        ci.enemies.bossSpawned = true;
+        log(`The capo falls... ${ci.enemies.bossGuard.name} emerges from the back!`, 'danger');
+      } else {
+        // No don: building is cleared
+        ci.building.cleared = true;
+        claimBusiness(ci.building);
+        log(`${ci.building.name} is under Matt's control.`, 'win');
+      }
+    }
+    // Check if all grunts just went down -> spawn capo
+    else if (allGruntsDown && !ci.enemies.capoSpawned) {
+      ci.enemies.capoSpawned = true;
+      log(`All guards are down... ${ci.enemies.capoGuard.name} steps out!`, 'danger');
+    }
+
+    currentEnemy = null;
+    state = 'explore';
+    updateUI();
+  } else {
+    _origAdvance();
+  }
+};
+
+// ===== OVERWORLD MOVEMENT =====
+function moveOverworld(dx, dy) {
+  if (dx < 0) playerFacing = 'left';
+  else if (dx > 0) playerFacing = 'right';
+  else if (dy < 0) playerFacing = 'up';
+  else playerFacing = 'down';
+
+  const nx = player.x + dx;
+  const ny = player.y + dy;
+  const tile = getTileType(nx, ny);
+
+  if (!WALKABLE.has(tile)) return;
+
+  // Check for NPC
+  const npc = isNPCAt(nx, ny);
+  if (npc) {
+    const line = npc.dialogue[npc.dialogueIndex % npc.dialogue.length];
+    log(`Stranger: "${line}"`, 'blue');
+    npc.dialogueIndex++;
+    endStepEffects();
+    return;
+  }
+
   player.x = nx;
   player.y = ny;
-  stepOnTile(getTile(player.x, player.y));
+  smoothX = player.x * TILE;
+  smoothY = player.y * TILE;
+  walkFrame++;
+  updateCamera(player.x, player.y, WORLD_W, WORLD_H);
+
+  // Check door interactions
+  if (tile === T.DOOR) {
+    if (isJessClinicDoor(nx, ny)) {
+      visitJess();
+      return;
+    }
+    if (isCityHallDoor(nx, ny) && finalBossUnlocked && !cityHallCleared) {
+      currentBusiness = {
+        name: 'City Hall', district: 'City Center', difficulty: 5,
+        guards: [{ name:'Don Mattissimo', rank:'boss', district:'City Center',
+          trait:'Snake', level:12, maxHp:150, hp:150, attack:18, dodge:0.14, don:true }]
+      };
+      startCombat(currentBusiness);
+      return;
+    }
+    const building = getBuildingAtDoor(nx, ny);
+    if (building) {
+      if (building.owner === 'Matt') {
+        log(`${building.name} already answers to Matt.`);
+      } else {
+        startTransition(() => enterBuilding(building));
+      }
+      return;
+    }
+  }
   endStepEffects();
+}
+
+// ===== INTERIOR MOVEMENT =====
+function moveInterior(dx, dy) {
+  if (dx < 0) playerFacing = 'left';
+  else if (dx > 0) playerFacing = 'right';
+  else if (dy < 0) playerFacing = 'up';
+  else playerFacing = 'down';
+
+  const ci = currentInterior;
+  const nx = player.x + dx;
+  const ny = player.y + dy;
+  if (nx < 0 || ny < 0 || nx >= ci.interior.w || ny >= ci.interior.h) return;
+  const tile = ci.interior.map[ny][nx];
+  if (!WALKABLE.has(tile) && tile !== T.IDOOR) return;
+
+  player.x = nx;
+  player.y = ny;
+  smoothX = player.x * TILE;
+  smoothY = player.y * TILE;
+  walkFrame++;
+  checkInteriorTile(nx, ny);
+}
+
+function move(dx, dy) {
+  if (state !== 'explore' || isMoving || transition.active) return;
+  if (currentInterior) moveInterior(dx, dy);
+  else moveOverworld(dx, dy);
 }
 
 window.addEventListener('keydown', (e) => {
@@ -1173,352 +1176,343 @@ addStaminaBtn.addEventListener('click', () => spendStat('stamina'));
 addIntimidationBtn.addEventListener('click', () => spendStat('intimidation'));
 addCunningBtn.addEventListener('click', () => spendStat('cunning'));
 
-function drawDistrictLabels() {
-  ctx.save();
-  ctx.font = '16px Georgia';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(255,255,255,0.18)';
-  ctx.fillText('North Side', 128, 32);
-  ctx.fillText('River Ward', 384, 32);
-  ctx.fillText('Gold Quarter', 128, 288);
-  ctx.fillText('South End', 384, 288);
-  ctx.restore();
-}
+// ===== NEW CAMERA-BASED RENDERING =====
 
-function drawCharacter(tx, ty, kind = 'player', boss = false) {
-  const px = tx * TILE;
-  const py = ty * TILE;
-  const bob = Math.round(Math.sin(tick / 8 + tx * 0.4 + ty * 0.25) * 1);
-
-  let suit = '#131313';
-  let tie = '#c9a227';
-  let hatBand = '#b6922f';
-
-  if (kind === 'associate') { suit = '#1d1d1d'; tie = '#c9a227'; hatBand = '#8d6f1f'; }
-  if (kind === 'capo') { suit = '#2a2a2a'; tie = '#cccccc'; hatBand = '#b0b0b0'; }
-  if (kind === 'boss') { suit = '#0d0d0d'; tie = '#9f2222'; hatBand = '#9f2222'; }
-
-  ctx.fillStyle = 'rgba(0,0,0,0.28)';
-  ctx.fillRect(px + 8, py + 25, 16, 4);
-
-  ctx.fillStyle = suit;
-  ctx.fillRect(px + 11, py + 20 + bob, 4, 8);
-  ctx.fillRect(px + 17, py + 20 + bob, 4, 8);
-  ctx.fillRect(px + 10, py + 12 + bob, 12, 10);
-
-  ctx.fillStyle = '#2c2c2c';
-  ctx.fillRect(px + 12, py + 13 + bob, 2, 5);
-  ctx.fillRect(px + 18, py + 13 + bob, 2, 5);
-
-  ctx.fillStyle = '#efefef';
-  ctx.fillRect(px + 14, py + 13 + bob, 4, 7);
-
-  ctx.fillStyle = tie;
-  ctx.fillRect(px + 15, py + 14 + bob, 2, 6);
-
-  ctx.fillStyle = suit;
-  ctx.fillRect(px + 8, py + 13 + bob, 2, 8);
-  ctx.fillRect(px + 22, py + 13 + bob, 2, 8);
-
-  ctx.fillStyle = '#efc28e';
-  ctx.fillRect(px + 11, py + 5 + bob, 10, 8);
-
-  ctx.fillStyle = '#101010';
-  ctx.fillRect(px + 13, py + 8 + bob, 1, 1);
-  ctx.fillRect(px + 18, py + 8 + bob, 1, 1);
-
-  ctx.fillStyle = '#090909';
-  ctx.fillRect(px + 9, py + 4 + bob, 14, 2);
-  ctx.fillRect(px + 11, py + 0 + bob, 10, 5);
-
-  ctx.fillStyle = hatBand;
-  ctx.fillRect(px + 11, py + 3 + bob, 10, 1);
-
-  if (kind === 'player') {
-    ctx.strokeStyle = '#f7e7b2';
-    ctx.strokeRect(px + 7, py + 2 + bob, 18, 27);
-  }
-
-  if (boss) {
-    ctx.strokeStyle = '#9f2222';
-    ctx.strokeRect(px + 9, py + 11 + bob, 14, 12);
-  }
-}
-
-function drawNurse(tx, ty) {
-  const px = tx * TILE;
-  const py = ty * TILE;
-  const bob = Math.round(Math.sin(tick / 9 + tx * 0.4 + ty * 0.2) * 1);
-
-  ctx.fillStyle = 'rgba(0,0,0,0.22)';
-  ctx.fillRect(px + 8, py + 25, 16, 4);
-
-  ctx.fillStyle = '#f7f7f7';
-  ctx.fillRect(px + 10, py + 12 + bob, 12, 12);
-
-  ctx.fillStyle = '#d9d9d9';
-  ctx.fillRect(px + 12, py + 14 + bob, 8, 10);
-
-  ctx.fillStyle = '#efc28e';
-  ctx.fillRect(px + 8, py + 14 + bob, 2, 7);
-  ctx.fillRect(px + 22, py + 14 + bob, 2, 7);
-
-  ctx.fillStyle = '#efc28e';
-  ctx.fillRect(px + 11, py + 5 + bob, 10, 8);
-
-  ctx.fillStyle = '#5a3418';
-  ctx.fillRect(px + 10, py + 4 + bob, 12, 4);
-
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(px + 11, py + 1 + bob, 10, 4);
-
-  ctx.fillStyle = '#b22222';
-  ctx.fillRect(px + 15, py + 1 + bob, 2, 4);
-  ctx.fillRect(px + 14, py + 2 + bob, 4, 2);
-
-  ctx.strokeStyle = '#dcdcdc';
-  ctx.strokeRect(px + 10, py + 12 + bob, 12, 12);
-}
-
-function drawBusinessMarker(x, y, t) {
-  const px = x * TILE;
-  const py = y * TILE;
-
-  ctx.fillStyle = '#f3efe6';
-  ctx.fillRect(px + 3, py + 3, 26, 26);
-
-  ctx.fillStyle = t.owner === 'Matt' ? '#1c5b38' : '#7a4a12';
-  ctx.fillRect(px + 2, py + 6, 28, 20);
-
-  ctx.fillStyle = t.owner === 'Matt' ? '#2f8a58' : '#b06a18';
-  ctx.fillRect(px + 2, py + 6, 28, 4);
-
-  ctx.fillStyle = '#2a1a0f';
-  ctx.fillRect(px + 12, py + 16, 8, 10);
-
-  ctx.fillStyle = '#d8c37f';
-  ctx.fillRect(px + 5, py + 13, 4, 4);
-  ctx.fillRect(px + 23, py + 13, 4, 4);
-
-  if (!t.owner && t.guards.length > 0) {
-    ctx.fillStyle = '#8f1d1d';
-    ctx.beginPath();
-    ctx.arc(px + 25, py + 9, 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  if (t.donSite) {
-    ctx.fillStyle = '#111';
-    ctx.font = '9px Georgia';
-    ctx.fillText('DON', px + 5, py + 29);
-  }
-}
-
-function drawClinicTile(x, y) {
-  const px = x * TILE;
-  const py = y * TILE;
-  ctx.fillStyle = '#181818';
-  ctx.fillRect(px, py, TILE, TILE);
-  ctx.fillStyle = '#f3efe6';
-  ctx.fillRect(px + 3, py + 3, 26, 26);
-  ctx.fillStyle = '#6d1b53';
-  ctx.fillRect(px + 2, py + 8, 28, 16);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(px + 12, py + 5, 8, 5);
-  ctx.fillRect(px + 14, py + 3, 4, 9);
-  ctx.fillStyle = '#111';
-  ctx.fillRect(px + 12, py + 17, 8, 9);
-}
-
-function drawFinalBossTile() {
-  if (!finalBossUnlocked || finalBossTile.claimed) return;
-  const px = finalBossTile.x * TILE;
-  const py = finalBossTile.y * TILE;
-  ctx.fillStyle = '#181818';
-  ctx.fillRect(px, py, TILE, TILE);
-  ctx.fillStyle = '#f3efe6';
-  ctx.fillRect(px + 3, py + 3, 26, 26);
-  ctx.fillStyle = '#4a0f0f';
-  ctx.fillRect(px + 4, py + 8, 24, 16);
-  ctx.fillStyle = '#d3c07c';
-  ctx.fillRect(px + 6, py + 10, 20, 3);
-  ctx.fillStyle = '#111';
-  ctx.font = '9px Georgia';
-  ctx.fillText('HALL', px + 4, py + 29);
-}
-
-function drawMap() {
+function drawOverworld() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  for (let y = 0; y < MAP; y++) {
-    for (let x = 0; x < MAP; x++) {
-      const t = city[y][x];
-      const px = x * TILE;
-      const py = y * TILE;
-      const district = districtFor(x, y);
-      const style = districtStyles[district];
+  const startX = Math.floor(camera.x / TILE);
+  const startY = Math.floor(camera.y / TILE);
+  const endX = Math.min(WORLD_W - 1, startX + VIEW_W + 1);
+  const endY = Math.min(WORLD_H - 1, startY + VIEW_H + 1);
 
-      if (t.kind === 'street') {
-        ctx.fillStyle = style.street;
-        ctx.fillRect(px, py, TILE, TILE);
-        ctx.fillStyle = style.accent;
-        if (x % 4 === 0) ctx.fillRect(px + 14, py + 4, 4, 24);
-        if (y % 4 === 0) ctx.fillRect(px + 4, py + 14, 24, 4);
-      } else if (t.kind === 'block') {
-        ctx.fillStyle = style.block;
-        ctx.fillRect(px, py, TILE, TILE);
-        ctx.fillStyle = '#111';
-        ctx.fillRect(px + 4, py + 4, 24, 24);
-      } else if (t.kind === 'business') {
-        ctx.fillStyle = '#181818';
-        ctx.fillRect(px, py, TILE, TILE);
-        drawBusinessMarker(x, y, t);
-      } else if (t.kind === 'clinic') {
-        drawClinicTile(x, y);
-      }
-
-      ctx.strokeStyle = '#111';
-      ctx.strokeRect(px, py, TILE, TILE);
+  // Draw tiles
+  for (let y = Math.max(0, startY); y <= endY; y++) {
+    for (let x = Math.max(0, startX); x <= endX; x++) {
+      const px = x * TILE - camera.x;
+      const py = y * TILE - camera.y;
+      drawOverworldTile(x, y, px, py);
     }
   }
 
-  drawFinalBossTile();
-
-  if (state === 'explore') {
-    for (let y = 0; y < MAP; y++) {
-      for (let x = 0; x < MAP; x++) {
-        const t = city[y][x];
-        if (t.kind === 'business' && !t.owner && t.guards.length > 0) {
-          const lead = t.guards[0];
-          const kind = lead.rank === 'boss' ? 'boss' : lead.rank === 'capo' ? 'capo' : 'associate';
-          drawCharacter(x, y, kind, lead.rank === 'boss' || lead.don);
-        } else if (t.kind === 'clinic') {
-          drawNurse(x, y);
-        }
-      }
+  // Draw building owner markers
+  buildingDefs.forEach(b => {
+    const px = b.worldX * TILE - camera.x;
+    const py = b.worldY * TILE - camera.y;
+    if (px > -TILE * 5 && px < canvas.width + TILE && py > -TILE * 4 && py < canvas.height + TILE) {
+      drawBuildingOwnerMarker(px, py, b);
     }
+  });
 
-    if (finalBossUnlocked && !finalBossTile.claimed) {
-      drawCharacter(finalBossTile.x, finalBossTile.y, 'boss', true);
+  // Draw NPCs
+  npcDefs.forEach(n => {
+    const px = n.x * TILE - camera.x;
+    const py = n.y * TILE - camera.y;
+    if (px > -TILE && px < canvas.width + TILE && py > -TILE && py < canvas.height + TILE) {
+      drawSprite(px, py, 'npc', 'down', 0, false);
+    }
+  });
+
+  // Jess is inside her clinic — no overworld sprite
+
+  // Draw player
+  const ppx = player.x * TILE - camera.x;
+  const ppy = player.y * TILE - camera.y;
+  drawSprite(ppx, ppy, 'player', playerFacing, walkFrame, false);
+}
+
+function drawInterior() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const ci = currentInterior;
+  if (!ci) return;
+
+  // Center the interior on screen
+  const offsetX = Math.floor((canvas.width - ci.interior.w * TILE) / 2);
+  const offsetY = Math.floor((canvas.height - ci.interior.h * TILE) / 2);
+
+  // Draw interior tiles
+  for (let y = 0; y < ci.interior.h; y++) {
+    for (let x = 0; x < ci.interior.w; x++) {
+      drawInteriorTile(ci.interior.map[y][x], offsetX + x * TILE, offsetY + y * TILE);
     }
   }
 
-  drawDistrictLabels();
-  drawCharacter(player.x, player.y, 'player', false);
-
-  if (state === 'combat' && currentEnemy) {
-    ctx.fillStyle = 'rgba(0,0,0,0.48)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#141414';
-    ctx.fillRect(304, 168, 156, 132);
-    ctx.strokeStyle = '#4a4a4a';
-    ctx.strokeRect(304, 168, 156, 132);
-    const kind = currentEnemy.rank === 'boss' ? 'boss' : currentEnemy.rank === 'capo' ? 'capo' : 'associate';
-    drawCharacter(11, 6, kind, currentEnemy.rank === 'boss' || currentEnemy.don);
-    ctx.fillStyle = '#f5f1e8';
-    ctx.font = '14px Georgia';
-    ctx.fillText(`${currentEnemy.name} Lv ${currentEnemy.level}`, 314, 280);
-    ctx.fillText(`${currentEnemy.trait}`, 314, 296);
-  }
-
-  if (state === 'clinic') {
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#dfe7ea';
-    ctx.fillRect(64, 54, 384, 322);
-    ctx.strokeStyle = '#9aa6ac';
-    ctx.strokeRect(64, 54, 384, 322);
-    ctx.fillStyle = '#e7eef1';
-    ctx.fillRect(64, 54, 384, 186);
-    ctx.fillStyle = '#cfd8dc';
-    ctx.fillRect(64, 240, 384, 136);
-    ctx.fillStyle = '#b0bec5';
-    ctx.fillRect(64, 228, 384, 6);
-    ctx.strokeStyle = '#b0bec5';
-    for (let x = 64; x < 448; x += 32) {
-      for (let y = 240; y < 376; y += 32) {
-        ctx.strokeRect(x, y, 32, 32);
-      }
+  // Draw enemies
+  ci.enemies.enemies.forEach(e => {
+    if (!e.defeated) {
+      const kind = e.guard.rank === 'boss' ? 'boss' : e.guard.rank === 'capo' ? 'capo' : 'associate';
+      drawSprite(offsetX + e.x * TILE, offsetY + e.y * TILE, kind, 'down', 0, e.guard.don);
     }
-    ctx.fillStyle = '#90a4ae';
-    ctx.fillRect(248, 204, 108, 16);
-    ctx.fillStyle = '#eceff1';
-    ctx.fillRect(252, 184, 100, 22);
-    ctx.fillStyle = '#78909c';
-    ctx.fillRect(244, 180, 6, 42);
-    ctx.fillRect(352, 180, 6, 42);
-    ctx.fillStyle = '#78909c';
-    ctx.fillRect(376, 138, 4, 94);
-    ctx.beginPath();
-    ctx.arc(378, 130, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#78909c';
-    ctx.beginPath();
-    ctx.moveTo(378, 136);
-    ctx.lineTo(392, 146);
-    ctx.stroke();
-    ctx.fillStyle = 'rgba(0,0,0,0.22)';
-    ctx.fillRect(150, 250, 50, 8);
-    ctx.fillRect(278, 250, 50, 8);
-    drawCharacter(5, 6, 'player', false);
-    drawNurse(9, 6);
-    ctx.fillStyle = '#263238';
-    ctx.fillRect(88, 298, 336, 58);
-    ctx.strokeStyle = '#37474f';
-    ctx.strokeRect(88, 298, 336, 58);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '14px Georgia';
-    ctx.fillText('Jess: "You need a full heal, Matt?"', 100, 320);
-    ctx.fillText(`Cost: $${jessLocation.fee}`, 100, 340);
+  });
+
+  // Draw capo if spawned
+  if (ci.enemies.capoSpawned && !ci.enemies.capoDefeated) {
+    const cs = ci.enemies.capoSpot;
+    drawSprite(offsetX + cs.x * TILE, offsetY + cs.y * TILE, 'capo', 'down', 0, false);
   }
 
-  if (state === 'recruit' && currentDefeatedEnemy) {
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#151515';
-    ctx.fillRect(70, 70, 372, 290);
-    ctx.strokeStyle = '#4a4a4a';
-    ctx.strokeRect(70, 70, 372, 290);
-    ctx.fillStyle = '#f3efe6';
-    ctx.fillRect(94, 94, 324, 170);
-    ctx.fillStyle = 'rgba(0,0,0,0.22)';
-    ctx.fillRect(138, 238, 60, 8);
-    ctx.fillRect(286, 238, 60, 8);
-    drawCharacter(5, 5, 'player', false);
-
-    const kind = currentDefeatedEnemy.rank === 'boss'
-      ? 'boss'
-      : currentDefeatedEnemy.rank === 'capo'
-        ? 'capo'
-        : 'associate';
-
-    drawCharacter(10, 5, kind, currentDefeatedEnemy.rank === 'boss' || currentDefeatedEnemy.don);
-
-    ctx.fillStyle = '#111';
-    ctx.font = '16px Georgia';
-    ctx.fillText(`${currentDefeatedEnemy.name} is finished.`, 156, 286);
-    ctx.font = '14px Georgia';
-    ctx.fillText(`Trait: ${currentDefeatedEnemy.trait} (${traitBonusDescription(currentDefeatedEnemy.trait)})`, 114, 312);
-    ctx.fillText(currentDefeatedEnemy.don ? 'A Don cannot be recruited.' : 'Recruit, spare, or eliminate.', 136, 334);
+  // Draw boss if spawned
+  if (ci.enemies.bossSpawned && !ci.enemies.bossDefeated && ci.enemies.bossGuard) {
+    const bs = ci.enemies.bossSpot;
+    drawSprite(offsetX + bs.x * TILE, offsetY + bs.y * TILE, 'boss', 'down', 0, true);
   }
 
-  if (state === 'win') {
-    ctx.fillStyle = 'rgba(0,0,0,0.54)';
+  // Draw player
+  const ppx = offsetX + player.x * TILE;
+  const ppy = offsetY + player.y * TILE;
+  drawSprite(ppx, ppy, 'player', playerFacing, walkFrame, false);
+}
+
+function drawCombatOverlay() {
+  ctx.fillStyle = 'rgba(0,0,0,0.48)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#141414';
+  ctx.fillRect(304, 168, 156, 132);
+  ctx.strokeStyle = '#4a4a4a';
+  ctx.strokeRect(304, 168, 156, 132);
+  const kind = currentEnemy.rank === 'boss' ? 'boss' : currentEnemy.rank === 'capo' ? 'capo' : 'associate';
+  drawSprite(352, 192, kind, 'down', 0, currentEnemy.rank === 'boss' || currentEnemy.don);
+  ctx.fillStyle = '#f5f1e8';
+  ctx.font = '14px Georgia';
+  ctx.fillText(`${currentEnemy.name} Lv ${currentEnemy.level}`, 314, 280);
+  ctx.fillText(`${currentEnemy.trait}`, 314, 296);
+}
+
+function drawClinicOverlay() {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#dfe7ea';
+  ctx.fillRect(64, 54, 384, 322);
+  ctx.strokeStyle = '#9aa6ac';
+  ctx.strokeRect(64, 54, 384, 322);
+  ctx.fillStyle = '#e7eef1';
+  ctx.fillRect(64, 54, 384, 186);
+  ctx.fillStyle = '#cfd8dc';
+  ctx.fillRect(64, 240, 384, 136);
+  ctx.fillStyle = '#b0bec5';
+  ctx.fillRect(64, 228, 384, 6);
+  ctx.strokeStyle = '#b0bec5';
+  for (let x = 64; x < 448; x += 32) {
+    for (let y = 240; y < 376; y += 32) {
+      ctx.strokeRect(x, y, 32, 32);
+    }
+  }
+  ctx.fillStyle = '#90a4ae';
+  ctx.fillRect(248, 204, 108, 16);
+  ctx.fillStyle = '#eceff1';
+  ctx.fillRect(252, 184, 100, 22);
+  ctx.fillStyle = '#78909c';
+  ctx.fillRect(244, 180, 6, 42);
+  ctx.fillRect(352, 180, 6, 42);
+  ctx.fillRect(376, 138, 4, 94);
+  ctx.beginPath();
+  ctx.arc(378, 130, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#78909c';
+  ctx.beginPath();
+  ctx.moveTo(378, 136);
+  ctx.lineTo(392, 146);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(150, 250, 50, 8);
+  ctx.fillRect(278, 250, 50, 8);
+  drawSprite(160, 192, 'player', 'right', 0, false);
+  drawNurseSprite(288, 192);
+  ctx.fillStyle = '#263238';
+  ctx.fillRect(88, 298, 336, 58);
+  ctx.strokeStyle = '#37474f';
+  ctx.strokeRect(88, 298, 336, 58);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '14px Georgia';
+  ctx.fillText('Jess: "You need a full heal, Matt?"', 100, 320);
+  ctx.fillText(`Cost: $${jessFee}`, 100, 340);
+}
+
+function drawRecruitOverlay() {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#151515';
+  ctx.fillRect(70, 70, 372, 290);
+  ctx.strokeStyle = '#4a4a4a';
+  ctx.strokeRect(70, 70, 372, 290);
+  ctx.fillStyle = '#f3efe6';
+  ctx.fillRect(94, 94, 324, 170);
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(138, 238, 60, 8);
+  ctx.fillRect(286, 238, 60, 8);
+  drawSprite(160, 160, 'player', 'right', 0, false);
+
+  const kind = currentDefeatedEnemy.rank === 'boss' ? 'boss'
+    : currentDefeatedEnemy.rank === 'capo' ? 'capo' : 'associate';
+  drawSprite(320, 160, kind, 'left', 0, currentDefeatedEnemy.rank === 'boss' || currentDefeatedEnemy.don);
+
+  ctx.fillStyle = '#111';
+  ctx.font = '16px Georgia';
+  ctx.fillText(`${currentDefeatedEnemy.name} is finished.`, 156, 286);
+  ctx.font = '14px Georgia';
+  ctx.fillText(`Trait: ${currentDefeatedEnemy.trait} (${traitBonusDescription(currentDefeatedEnemy.trait)})`, 114, 312);
+  ctx.fillText(currentDefeatedEnemy.don ? 'A Don cannot be recruited.' : 'Recruit, spare, or eliminate.', 136, 334);
+}
+
+function drawWinOverlay() {
+  ctx.fillStyle = 'rgba(0,0,0,0.54)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#f7e7b2';
+  ctx.font = '28px Georgia';
+  ctx.fillText('Mattopoly Complete', 120, 236);
+  ctx.font = '16px Georgia';
+  ctx.fillText(`The whole city answers to ${gangName}.`, 138, 268);
+}
+
+function drawGame() {
+  // Draw base scene
+  if (currentInterior) {
+    drawInterior();
+  } else {
+    drawOverworld();
+  }
+
+  // Draw overlays based on state
+  if (state === 'combat' && currentEnemy) drawCombatOverlay();
+  if (state === 'clinic') drawClinicOverlay();
+  if (state === 'recruit' && currentDefeatedEnemy) drawRecruitOverlay();
+  if (state === 'win') drawWinOverlay();
+
+  // Transition overlay
+  if (transition.active) {
+    updateTransition();
+    ctx.fillStyle = `rgba(0,0,0,${transition.alpha})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#f7e7b2';
-    ctx.font = '28px Georgia';
-    ctx.fillText('Mattopoly Complete', 120, 236);
-    ctx.font = '16px Georgia';
-    ctx.fillText(`The whole city answers to ${gangName}.`, 138, 268);
   }
 }
 
 function loop() {
   tick++;
-  drawMap();
+  drawGame();
   requestAnimationFrame(loop);
 }
 
+// ===== SAVE/LOAD UPDATES =====
+const _origSave = saveGame;
+saveGame = async function() {
+  try {
+    const db = await openSaveDB();
+    const tx = db.transaction(SAVE_STORE, 'readwrite');
+    const store = tx.objectStore(SAVE_STORE);
+
+    const payload = {
+      player: structuredClone(player),
+      buildingDefs: structuredClone(buildingDefs),
+      totalBusinesses,
+      districtTotals: structuredClone(districtTotals),
+      finalBossUnlocked,
+      cityHallCleared,
+      gangName,
+      jessFee,
+      state: 'explore',
+      turnCounter,
+      savedAt: new Date().toISOString()
+    };
+
+    await new Promise((resolve, reject) => {
+      const req = store.put(payload, SAVE_KEY);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+
+    db.close();
+    log('Game saved to the books.', 'blue');
+  } catch (err) {
+    console.error(err);
+    log('Save failed.', 'danger');
+  }
+};
+
+const _origLoad = loadGame;
+loadGame = async function() {
+  try {
+    const db = await openSaveDB();
+    const tx = db.transaction(SAVE_STORE, 'readonly');
+    const store = tx.objectStore(SAVE_STORE);
+
+    const payload = await new Promise((resolve, reject) => {
+      const req = store.get(SAVE_KEY);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+
+    db.close();
+
+    if (!payload) {
+      log('No saved game found.', 'danger');
+      return;
+    }
+
+    Object.assign(player, payload.player);
+    if (payload.buildingDefs) {
+      // Rebuild world then restore building state
+      buildWorld();
+      payload.buildingDefs.forEach((saved, i) => {
+        if (buildingDefs[i]) {
+          buildingDefs[i].owner = saved.owner;
+          buildingDefs[i].guards = saved.guards;
+          buildingDefs[i].cleared = saved.cleared;
+          buildingDefs[i].income = saved.income;
+        }
+      });
+    }
+    totalBusinesses = payload.totalBusinesses || buildingDefs.length;
+    districtTotals = payload.districtTotals || districtTotals;
+    finalBossUnlocked = payload.finalBossUnlocked || false;
+    cityHallCleared = payload.cityHallCleared || false;
+    gangName = payload.gangName || 'The Family';
+    jessFee = payload.jessFee || 55;
+    state = 'explore';
+    turnCounter = payload.turnCounter || 0;
+    currentBusiness = null;
+    currentEnemy = null;
+    currentDefeatedEnemy = null;
+    currentInterior = null;
+
+    smoothX = player.x * TILE;
+    smoothY = player.y * TILE;
+    updateCamera(player.x, player.y, WORLD_W, WORLD_H);
+
+    log(`Save loaded. Matt is back in business with ${gangName}.`, 'win');
+    updateUI();
+  } catch (err) {
+    console.error(err);
+    log('Load failed.', 'danger');
+  }
+};
+
+// ===== START =====
 resetNewGame();
 updateStatAllocationVisibility();
 loop();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
